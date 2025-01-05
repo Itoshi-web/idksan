@@ -16,7 +16,7 @@ const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
     origin: process.env.NODE_ENV === 'production' 
-      ? [/https:\/\/.*\.netlify\.app$/]
+      ? ['https://delicate-marigold-288ce7.netlify.app']
       : ["http://localhost:5173"],
     methods: ["GET", "POST"]
   }
@@ -32,6 +32,16 @@ const generateRoomId = () => {
   return roomId;
 };
 
+const generateRandomPowerUp = () => {
+  const powerUps = ['freeze', 'shield', 'turnSkipper'];
+  const randomIndex = Math.floor(Math.random() * powerUps.length);
+  return {
+    id: Math.random().toString(36).substr(2, 9),
+    type: powerUps[randomIndex],
+    createdAt: Date.now()
+  };
+};
+
 const initializeGameState = (players) => ({
   currentPlayer: 0,
   players: players.map(p => ({
@@ -39,12 +49,25 @@ const initializeGameState = (players) => ({
     username: p.username,
     eliminated: false,
     firstMove: true,
-    cells: Array(Math.min(players.length, 5)).fill({ stage: 0, isActive: false, bullets: 0 })
+    powerUps: [],
+    cells: Array(Math.min(players.length, 5)).fill().map(() => ({
+      id: Math.random().toString(36).substr(2, 9),
+      stage: 0,
+      isActive: false,
+      bullets: 0,
+      isShielded: false,
+      isFrozen: false
+    }))
   })),
   lastRoll: null,
   gameLog: [],
   canShoot: false,
-  rolledCell: null
+  rolledCell: null,
+  powerUpState: {
+    frozen: {},
+    shielded: {},
+    skippedTurns: {}
+  }
 });
 
 const processGameAction = (room, action, data) => {
@@ -55,6 +78,20 @@ const processGameAction = (room, action, data) => {
     case 'roll': {
       const { value } = data;
       gameState.lastRoll = value;
+      
+      // Special handling for 6 in 5+ player games
+      if (room.players.length >= 5 && value === 6) {
+        const powerUp = generateRandomPowerUp();
+        gameState.gameLog.push({
+          type: 'powerUp',
+          player: currentPlayer.username,
+          powerUp: powerUp.type
+        });
+        currentPlayer.powerUps.push(powerUp);
+        advanceToNextPlayer(gameState);
+        return gameState;
+      }
+
       gameState.rolledCell = value - 1;
 
       // First move rule - one attempt per turn
@@ -84,6 +121,7 @@ const processGameAction = (room, action, data) => {
 
       if (!cell.isActive) {
         currentPlayer.cells[cellIndex] = {
+          ...cell,
           stage: 1,
           isActive: true,
           bullets: 0
@@ -123,26 +161,36 @@ const processGameAction = (room, action, data) => {
       const target = gameState.players[targetPlayer];
 
       if (sourceCell.bullets > 0) {
-        target.cells[targetCell] = {
-          stage: 0,
-          isActive: false,
-          bullets: 0
-        };
+        const targetCellObj = target.cells[targetCell];
+        
+        // Check if the target cell is shielded
+        if (!targetCellObj.isShielded) {
+          targetCellObj.stage = 0;
+          targetCellObj.isActive = false;
+          targetCellObj.bullets = 0;
 
-        sourceCell.bullets -= 1;
+          sourceCell.bullets -= 1;
 
-        gameState.gameLog.push({
-          type: 'shoot',
-          shooter: currentPlayer.username,
-          target: target.username,
-          cell: targetCell + 1
-        });
-
-        target.eliminated = target.cells.every(cell => !cell.isActive);
-        if (target.eliminated) {
           gameState.gameLog.push({
-            type: 'eliminate',
-            player: target.username
+            type: 'shoot',
+            shooter: currentPlayer.username,
+            target: target.username,
+            cell: targetCell + 1
+          });
+
+          target.eliminated = target.cells.every(cell => !cell.isActive);
+          if (target.eliminated) {
+            gameState.gameLog.push({
+              type: 'eliminate',
+              player: target.username
+            });
+          }
+        } else {
+          gameState.gameLog.push({
+            type: 'blocked',
+            shooter: currentPlayer.username,
+            target: target.username,
+            cell: targetCell + 1
           });
         }
       }
@@ -151,18 +199,109 @@ const processGameAction = (room, action, data) => {
       advanceToNextPlayer(gameState);
       break;
     }
+
+    case 'usePowerUp': {
+      const { powerUpId, targetPlayer, targetCell } = data;
+      const powerUpIndex = currentPlayer.powerUps.findIndex(p => p.id === powerUpId);
+      if (powerUpIndex === -1) return gameState;
+
+      const powerUp = currentPlayer.powerUps[powerUpIndex];
+      currentPlayer.powerUps.splice(powerUpIndex, 1);
+
+      const target = gameState.players[targetPlayer];
+
+      switch (powerUp.type) {
+        case 'freeze': {
+          const cell = target.cells.find(c => c.id === targetCell);
+          if (cell) {
+            cell.isFrozen = true;
+            gameState.powerUpState.frozen[targetCell] = 1;
+          }
+          break;
+        }
+        case 'shield': {
+          const cell = currentPlayer.cells.find(c => c.id === targetCell);
+          if (cell) {
+            cell.isShielded = true;
+            gameState.powerUpState.shielded[targetCell] = 2;
+          }
+          break;
+        }
+        case 'turnSkipper': {
+          gameState.powerUpState.skippedTurns[target.id] = true;
+          break;
+        }
+      }
+
+      gameState.gameLog.push({
+        type: 'usePowerUp',
+        player: currentPlayer.username,
+        target: target.username,
+        powerUp: powerUp.type
+      });
+
+      break;
+    }
+
+    case 'storePowerUp': {
+      const { powerUpType } = data;
+      const powerUp = {
+        id: Math.random().toString(36).substr(2, 9),
+        type: powerUpType,
+        createdAt: Date.now()
+      };
+      currentPlayer.powerUps.push(powerUp);
+      break;
+    }
   }
 
   return gameState;
 };
 
 const advanceToNextPlayer = (gameState) => {
+  // Process power-up effects
+  Object.entries(gameState.powerUpState.frozen).forEach(([cellId, turnsLeft]) => {
+    if (turnsLeft <= 0) {
+      delete gameState.powerUpState.frozen[cellId];
+      gameState.players.forEach(player => {
+        player.cells.forEach(cell => {
+          if (cell.id === cellId) {
+            cell.isFrozen = false;
+          }
+        });
+      });
+    } else {
+      gameState.powerUpState.frozen[cellId]--;
+    }
+  });
+
+  Object.entries(gameState.powerUpState.shielded).forEach(([cellId, turnsLeft]) => {
+    if (turnsLeft <= 0) {
+      delete gameState.powerUpState.shielded[cellId];
+      gameState.players.forEach(player => {
+        player.cells.forEach(cell => {
+          if (cell.id === cellId) {
+            cell.isShielded = false;
+          }
+        });
+      });
+    } else {
+      gameState.powerUpState.shielded[cellId]--;
+    }
+  });
+
   do {
     gameState.currentPlayer = (gameState.currentPlayer + 1) % gameState.players.length;
   } while (
-    gameState.players[gameState.currentPlayer].eliminated &&
+    (gameState.players[gameState.currentPlayer].eliminated ||
+    gameState.powerUpState.skippedTurns[gameState.players[gameState.currentPlayer].id]) &&
     gameState.players.some(p => !p.eliminated)
   );
+
+  // Clear skip status for the player who was just skipped
+  if (gameState.powerUpState.skippedTurns[gameState.players[gameState.currentPlayer].id]) {
+    delete gameState.powerUpState.skippedTurns[gameState.players[gameState.currentPlayer].id];
+  }
 };
 
 io.on('connection', (socket) => {

@@ -64,9 +64,9 @@ const initializeGameState = (players) => ({
   canShoot: false,
   rolledCell: null,
   powerUpState: {
-    frozen: {},
-    shielded: {},
-    skippedTurns: {}
+    frozen: {},    // cellId -> turnsLeft
+    shielded: {},  // playerId -> turnsLeft
+    skippedTurns: {} // playerId -> boolean
   }
 });
 
@@ -169,6 +169,7 @@ const processGameAction = (room, action, data) => {
           targetCellObj.stage = 0;
           targetCellObj.isActive = false;
           targetCellObj.bullets = 0;
+          targetCellObj.isFrozen = false; // Reset frozen state when destroyed
 
           sourceCell.bullets -= 1;
 
@@ -178,6 +179,9 @@ const processGameAction = (room, action, data) => {
             target: target.username,
             cell: targetCell + 1
           });
+
+          // Remove any power-up effects on the destroyed cell
+          delete gameState.powerUpState.frozen[targetCellObj.id];
 
           target.eliminated = target.cells.every(cell => !cell.isActive);
           if (target.eliminated) {
@@ -193,6 +197,7 @@ const processGameAction = (room, action, data) => {
             target: target.username,
             cell: targetCell + 1
           });
+          sourceCell.bullets -= 1; // Still consume a bullet even if blocked
         }
       }
 
@@ -215,44 +220,52 @@ const processGameAction = (room, action, data) => {
         case 'freeze': {
           if (targetCell) {
             const cell = target.cells.find(c => c.id === targetCell);
-            if (cell) {
+            if (cell && cell.isActive && !cell.isShielded) {
               cell.isFrozen = true;
               gameState.powerUpState.frozen[targetCell] = 2; // Freeze for 2 turns
+              
+              gameState.gameLog.push({
+                type: 'usePowerUp',
+                player: currentPlayer.username,
+                target: target.username,
+                powerUp: 'freeze'
+              });
             }
           }
           break;
         }
         case 'shield': {
           // Shield all cells of the target player
+          gameState.powerUpState.shielded[target.id] = 2; // Shield for 2 turns
           target.cells.forEach(cell => {
-            cell.isShielded = true;
-            gameState.powerUpState.shielded[cell.id] = 2; // Shield for 2 turns
+            if (cell.isActive) {
+              cell.isShielded = true;
+            }
+          });
+          
+          gameState.gameLog.push({
+            type: 'usePowerUp',
+            player: currentPlayer.username,
+            target: target.username,
+            powerUp: 'shield'
           });
           break;
         }
         case 'turnSkipper': {
-          gameState.powerUpState.skippedTurns[target.id] = true;
+          if (!target.eliminated) {
+            gameState.powerUpState.skippedTurns[target.id] = true;
+            
+            gameState.gameLog.push({
+              type: 'usePowerUp',
+              player: currentPlayer.username,
+              target: target.username,
+              powerUp: 'turnSkipper'
+            });
+          }
           break;
         }
       }
 
-      gameState.gameLog.push({
-        type: 'usePowerUp',
-        player: currentPlayer.username,
-        target: target.username,
-        powerUp: powerUp.type
-      });
-
-      break;
-    }
-
-    case 'continueAfterPowerUp': {
-      // Don't advance to next player, allow another roll
-      break;
-    }
-
-    case 'endTurn': {
-      advanceToNextPlayer(gameState);
       break;
     }
 
@@ -267,6 +280,16 @@ const processGameAction = (room, action, data) => {
       advanceToNextPlayer(gameState);
       break;
     }
+
+    case 'continueAfterPowerUp': {
+      // Don't advance to next player, allow another roll
+      break;
+    }
+
+    case 'endTurn': {
+      advanceToNextPlayer(gameState);
+      break;
+    }
   }
 
   return gameState;
@@ -274,9 +297,24 @@ const processGameAction = (room, action, data) => {
 
 const advanceToNextPlayer = (gameState) => {
   // Process power-up effects
-  Object.entries(gameState.powerUpState.frozen).forEach(([cellId, turnsLeft]) => {
+  for (const [playerId, turnsLeft] of Object.entries(gameState.powerUpState.shielded)) {
     if (turnsLeft <= 0) {
-      delete gameState.powerUpState.frozen[cellId];
+      // Remove shield from all cells
+      const player = gameState.players.find(p => p.id === playerId);
+      if (player) {
+        player.cells.forEach(cell => {
+          cell.isShielded = false;
+        });
+      }
+      delete gameState.powerUpState.shielded[playerId];
+    } else {
+      gameState.powerUpState.shielded[playerId]--;
+    }
+  }
+
+  for (const [cellId, turnsLeft] of Object.entries(gameState.powerUpState.frozen)) {
+    if (turnsLeft <= 0) {
+      // Find and unfreeze the cell
       gameState.players.forEach(player => {
         player.cells.forEach(cell => {
           if (cell.id === cellId) {
@@ -284,25 +322,11 @@ const advanceToNextPlayer = (gameState) => {
           }
         });
       });
+      delete gameState.powerUpState.frozen[cellId];
     } else {
       gameState.powerUpState.frozen[cellId]--;
     }
-  });
-
-  Object.entries(gameState.powerUpState.shielded).forEach(([cellId, turnsLeft]) => {
-    if (turnsLeft <= 0) {
-      delete gameState.powerUpState.shielded[cellId];
-      gameState.players.forEach(player => {
-        player.cells.forEach(cell => {
-          if (cell.id === cellId) {
-            cell.isShielded = false;
-          }
-        });
-      });
-    } else {
-      gameState.powerUpState.shielded[cellId]--;
-    }
-  });
+  }
 
   do {
     gameState.currentPlayer = (gameState.currentPlayer + 1) % gameState.players.length;

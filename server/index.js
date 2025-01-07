@@ -131,14 +131,16 @@ const processGameAction = (room, action, data) => {
           cell: cellIndex + 1
         });
       } else if (cell.stage < 6) {
-        cell.stage += 1;
-        if (cell.stage === 6) {
-          cell.bullets = 5;
-          gameState.gameLog.push({
-            type: 'maxLevel',
-            player: currentPlayer.username,
-            cell: cellIndex + 1
-          });
+        if (!cell.isFrozen) {
+          cell.stage += 1;
+          if (cell.stage === 6) {
+            cell.bullets = 5;
+            gameState.gameLog.push({
+              type: 'maxLevel',
+              player: currentPlayer.username,
+              cell: cellIndex + 1
+            });
+          }
         }
       } else if (cell.bullets === 0) {
         cell.bullets = 5;
@@ -211,16 +213,18 @@ const processGameAction = (room, action, data) => {
 
       switch (powerUp.type) {
         case 'freeze': {
-          const cell = target.cells[targetCell];
-          if (cell) {
-            cell.isFrozen = true;
-            gameState.powerUpState.frozen[targetCell] = 2; // Freeze for 2 turns
+          if (targetCell) {
+            const cell = target.cells.find(c => c.id === targetCell);
+            if (cell) {
+              cell.isFrozen = true;
+              gameState.powerUpState.frozen[targetCell] = 2; // Freeze for 2 turns
+            }
           }
           break;
         }
         case 'shield': {
-          // Shield all cells of the current player
-          currentPlayer.cells.forEach(cell => {
+          // Shield all cells of the target player
+          target.cells.forEach(cell => {
             cell.isShielded = true;
             gameState.powerUpState.shielded[cell.id] = 2; // Shield for 2 turns
           });
@@ -239,10 +243,16 @@ const processGameAction = (room, action, data) => {
         powerUp: powerUp.type
       });
 
-      // Don't advance to next player if using power-up immediately after rolling 6
-      if (gameState.lastRoll !== 6) {
-        advanceToNextPlayer(gameState);
-      }
+      break;
+    }
+
+    case 'continueAfterPowerUp': {
+      // Don't advance to next player, allow another roll
+      break;
+    }
+
+    case 'endTurn': {
+      advanceToNextPlayer(gameState);
       break;
     }
 

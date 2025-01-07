@@ -88,7 +88,6 @@ const processGameAction = (room, action, data) => {
           powerUp: powerUp.type
         });
         currentPlayer.powerUps.push(powerUp);
-        advanceToNextPlayer(gameState);
         return gameState;
       }
 
@@ -212,19 +211,19 @@ const processGameAction = (room, action, data) => {
 
       switch (powerUp.type) {
         case 'freeze': {
-          const cell = target.cells.find(c => c.id === targetCell);
+          const cell = target.cells[targetCell];
           if (cell) {
             cell.isFrozen = true;
-            gameState.powerUpState.frozen[targetCell] = 1;
+            gameState.powerUpState.frozen[targetCell] = 2; // Freeze for 2 turns
           }
           break;
         }
         case 'shield': {
-          const cell = currentPlayer.cells.find(c => c.id === targetCell);
-          if (cell) {
+          // Shield all cells of the current player
+          currentPlayer.cells.forEach(cell => {
             cell.isShielded = true;
-            gameState.powerUpState.shielded[targetCell] = 2;
-          }
+            gameState.powerUpState.shielded[cell.id] = 2; // Shield for 2 turns
+          });
           break;
         }
         case 'turnSkipper': {
@@ -240,6 +239,10 @@ const processGameAction = (room, action, data) => {
         powerUp: powerUp.type
       });
 
+      // Don't advance to next player if using power-up immediately after rolling 6
+      if (gameState.lastRoll !== 6) {
+        advanceToNextPlayer(gameState);
+      }
       break;
     }
 
@@ -251,6 +254,7 @@ const processGameAction = (room, action, data) => {
         createdAt: Date.now()
       };
       currentPlayer.powerUps.push(powerUp);
+      advanceToNextPlayer(gameState);
       break;
     }
   }

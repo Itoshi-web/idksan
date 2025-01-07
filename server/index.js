@@ -66,7 +66,7 @@ const initializeGameState = (players) => ({
   powerUpState: {
     frozen: {},    // cellId -> turnsLeft
     shielded: {},  // playerId -> turnsLeft
-    skippedTurns: {} // playerId -> boolean
+    skippedTurns: {} // playerId -> boolean (true means skip next turn)
   }
 });
 
@@ -253,6 +253,7 @@ const processGameAction = (room, action, data) => {
         }
         case 'turnSkipper': {
           if (!target.eliminated) {
+            // Mark the target player to skip their next turn only
             gameState.powerUpState.skippedTurns[target.id] = true;
             
             gameState.gameLog.push({
@@ -328,17 +329,18 @@ const advanceToNextPlayer = (gameState) => {
     }
   }
 
+  // Move to next player
   do {
     gameState.currentPlayer = (gameState.currentPlayer + 1) % gameState.players.length;
-  } while (
-    (gameState.players[gameState.currentPlayer].eliminated ||
-    gameState.powerUpState.skippedTurns[gameState.players[gameState.currentPlayer].id]) &&
-    gameState.players.some(p => !p.eliminated)
-  );
+  } while (gameState.players[gameState.currentPlayer].eliminated);
 
-  // Clear skip status for the player who was just skipped
-  if (gameState.powerUpState.skippedTurns[gameState.players[gameState.currentPlayer].id]) {
-    delete gameState.powerUpState.skippedTurns[gameState.players[gameState.currentPlayer].id];
+  // Check if current player should skip their turn
+  const currentPlayerId = gameState.players[gameState.currentPlayer].id;
+  if (gameState.powerUpState.skippedTurns[currentPlayerId]) {
+    // Remove the skip status and skip to next player
+    delete gameState.powerUpState.skippedTurns[currentPlayerId];
+    // Recursively call to move to next player
+    advanceToNextPlayer(gameState);
   }
 };
 

@@ -77,7 +77,7 @@ const initializeGameState = (players) => ({
 });
 
 // AI logic for making moves
-const makeAIMove = (room, playerId) => {
+const makeAIMove = (room) => {
   const gameState = room.gameState;
   const currentPlayer = gameState.players[gameState.currentPlayer];
   
@@ -301,7 +301,7 @@ const processGameAction = (room, action, data) => {
         }
         case 'turnSkipper': {
           if (!target.eliminated) {
-            // Mark the target player to skip their next turn
+            // Mark the target player to skip their next turn only
             gameState.powerUpState.skippedTurns[target.id] = true;
             
             gameState.gameLog.push({
@@ -397,7 +397,10 @@ const advanceToNextPlayer = (room) => {
   // If it's an AI player's turn, make their move
   const currentPlayer = room.players[gameState.currentPlayer];
   if (currentPlayer.isAI) {
-    makeAIMove(room, currentPlayer.id);
+    // Emit the updated game state before AI makes its move
+    io.to(room.id).emit('gameStateUpdated', { gameState });
+    // Make AI move
+    makeAIMove(room);
   }
 };
 
@@ -477,6 +480,11 @@ io.on('connection', (socket) => {
     });
     
     socket.emit('gameStarted', { gameState: room.gameState });
+
+    // If the first player is AI, make their move
+    if (room.players[0].isAI) {
+      makeAIMove(room);
+    }
   });
 
   socket.on('joinRoom', ({ roomId, password, username }) => {
@@ -546,7 +554,7 @@ io.on('connection', (socket) => {
       
       // If the first player is AI, make their move
       if (room.players[0].isAI) {
-        makeAIMove(room, room.players[0].id);
+        makeAIMove(room);
       }
     }
   });

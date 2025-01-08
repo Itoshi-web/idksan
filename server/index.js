@@ -209,10 +209,15 @@ const processGameAction = (room, action, data) => {
     case 'usePowerUp': {
       const { powerUpId, targetPlayer, targetCell } = data;
       const powerUpIndex = currentPlayer.powerUps.findIndex(p => p.id === powerUpId);
-      if (powerUpIndex === -1) return gameState;
+      
+      // For immediate use power-ups, powerUpIndex might be -1
+      const powerUp = powerUpIndex !== -1 
+        ? currentPlayer.powerUps[powerUpIndex]
+        : { id: powerUpId, type: data.type };
 
-      const powerUp = currentPlayer.powerUps[powerUpIndex];
-      currentPlayer.powerUps.splice(powerUpIndex, 1);
+      if (powerUpIndex !== -1) {
+        currentPlayer.powerUps.splice(powerUpIndex, 1);
+      }
 
       const target = gameState.players[targetPlayer];
 
@@ -253,7 +258,7 @@ const processGameAction = (room, action, data) => {
         }
         case 'turnSkipper': {
           if (!target.eliminated) {
-            // Mark the target player to skip their next turn only
+            // Mark the target player to skip their next turn
             gameState.powerUpState.skippedTurns[target.id] = true;
             
             gameState.gameLog.push({
@@ -266,7 +271,6 @@ const processGameAction = (room, action, data) => {
           break;
         }
       }
-
       break;
     }
 
@@ -301,185 +305,3 @@ const advanceToNextPlayer = (gameState) => {
   for (const [playerId, turnsLeft] of Object.entries(gameState.powerUpState.shielded)) {
     if (turnsLeft <= 0) {
       // Remove shield from all cells
-      const player = gameState.players.find(p => p.id === playerId);
-      if (player) {
-        player.cells.forEach(cell => {
-          cell.isShielded = false;
-        });
-      }
-      delete gameState.powerUpState.shielded[playerId];
-    } else {
-      gameState.powerUpState.shielded[playerId]--;
-    }
-  }
-
-  for (const [cellId, turnsLeft] of Object.entries(gameState.powerUpState.frozen)) {
-    if (turnsLeft <= 0) {
-      // Find and unfreeze the cell
-      gameState.players.forEach(player => {
-        player.cells.forEach(cell => {
-          if (cell.id === cellId) {
-            cell.isFrozen = false;
-          }
-        });
-      });
-      delete gameState.powerUpState.frozen[cellId];
-    } else {
-      gameState.powerUpState.frozen[cellId]--;
-    }
-  }
-
-  // Move to next player
-  do {
-    gameState.currentPlayer = (gameState.currentPlayer + 1) % gameState.players.length;
-  } while (gameState.players[gameState.currentPlayer].eliminated);
-
-  // Check if current player should skip their turn
-  const currentPlayerId = gameState.players[gameState.currentPlayer].id;
-  if (gameState.powerUpState.skippedTurns[currentPlayerId]) {
-    // Remove the skip status and skip to next player
-    delete gameState.powerUpState.skippedTurns[currentPlayerId];
-    // Recursively call to move to next player
-    advanceToNextPlayer(gameState);
-  }
-};
-
-io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
-
-  socket.on('createRoom', ({ maxPlayers, password, username }) => {
-    const roomId = generateRoomId();
-    const room = {
-      id: roomId,
-      leader: socket.id,
-      password: password || null,
-      maxPlayers,
-      players: [{
-        id: socket.id,
-        username,
-        ready: true,
-        isLeader: true
-      }],
-      gameState: null,
-      started: false
-    };
-    
-    rooms.set(roomId, room);
-    socket.join(roomId);
-    
-    socket.emit('roomCreated', {
-      roomId,
-      room: {
-        ...room,
-        password: undefined
-      }
-    });
-  });
-
-  socket.on('joinRoom', ({ roomId, password, username }) => {
-    const room = rooms.get(roomId);
-    
-    if (!room) {
-      socket.emit('error', { message: 'Room not found' });
-      return;
-    }
-
-    if (room.password && room.password !== password) {
-      socket.emit('error', { message: 'Incorrect password' });
-      return;
-    }
-
-    if (room.players.length >= room.maxPlayers) {
-      socket.emit('error', { message: 'Room is full' });
-      return;
-    }
-
-    if (room.started) {
-      socket.emit('error', { message: 'Game already in progress' });
-      return;
-    }
-
-    room.players.push({
-      id: socket.id,
-      username,
-      ready: false,
-      isLeader: false
-    });
-
-    socket.join(roomId);
-    
-    io.to(roomId).emit('playerJoined', {
-      room: {
-        ...room,
-        password: undefined
-      }
-    });
-  });
-
-  socket.on('toggleReady', ({ roomId }) => {
-    const room = rooms.get(roomId);
-    if (!room) return;
-
-    const player = room.players.find(p => p.id === socket.id);
-    if (player) {
-      player.ready = !player.ready;
-      io.to(roomId).emit('roomUpdated', {
-        room: {
-          ...room,
-          password: undefined
-        }
-      });
-    }
-  });
-
-  socket.on('startGame', ({ roomId }) => {
-    const room = rooms.get(roomId);
-    if (!room || room.leader !== socket.id) return;
-
-    if (room.players.every(p => p.ready)) {
-      room.started = true;
-      room.gameState = initializeGameState(room.players);
-      io.to(roomId).emit('gameStarted', { gameState: room.gameState });
-    }
-  });
-
-  socket.on('gameAction', ({ roomId, action, data }) => {
-    const room = rooms.get(roomId);
-    if (!room || !room.started) return;
-
-    const currentPlayerId = room.gameState.players[room.gameState.currentPlayer].id;
-    if (currentPlayerId !== socket.id) return;
-
-    const updatedGameState = processGameAction(room, action, data);
-    io.to(roomId).emit('gameStateUpdated', { gameState: updatedGameState });
-  });
-
-  socket.on('disconnect', () => {
-    for (const [roomId, room] of rooms.entries()) {
-      const playerIndex = room.players.findIndex(p => p.id === socket.id);
-      
-      if (playerIndex !== -1) {
-        room.players.splice(playerIndex, 1);
-        
-        if (room.players.length === 0) {
-          rooms.delete(roomId);
-        } else if (room.leader === socket.id) {
-          room.leader = room.players[0].id;
-          room.players[0].isLeader = true;
-        }
-
-        io.to(roomId).emit('playerLeft', {
-          room: {
-            ...room,
-            password: undefined
-          }
-        });
-      }
-    }
-  });
-});
-
-const PORT = process.env.PORT || 3000;
-httpServer.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});

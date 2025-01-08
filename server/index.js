@@ -301,7 +301,7 @@ const processGameAction = (room, action, data) => {
         }
         case 'turnSkipper': {
           if (!target.eliminated) {
-            // Mark the target player to skip their next turn only
+            // Mark the target player to skip their next turn
             gameState.powerUpState.skippedTurns[target.id] = true;
             
             gameState.gameLog.push({
@@ -384,9 +384,6 @@ const advanceToNextPlayer = (room) => {
     gameState.currentPlayer = (gameState.currentPlayer + 1) % gameState.players.length;
   } while (gameState.players[gameState.currentPlayer].eliminated);
 
-  // Check if current player should skip their turn
-  const currentPlayerId = gameState.players[gameState.currentPlayer].id;
-  if (gameState.powerUpState.skippedTurns[currentPlayerId]) {
   // Check if current player should skip their turn
   const currentPlayerId = gameState.players[gameState.currentPlayer].id;
   if (gameState.powerUpState.skippedTurns[currentPlayerId]) {

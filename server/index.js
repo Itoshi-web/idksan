@@ -16,19 +16,13 @@ const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
     origin: process.env.NODE_ENV === 'production' 
-      ? [/https:\/\/.*\.netlify\.app$/]
+      ? ['https://stupendous-sundae-f61b92.netlify.app']
       : ["http://localhost:5173"],
     methods: ["GET", "POST"]
   }
 });
 
 const rooms = new Map();
-
-// AI player names
-const aiNames = [
-  'AlphaBot', 'OmegaAI', 'NeuralKnight', 'QuantumMind', 'CyberGenius',
-  'SiliconSage', 'BinaryBrain', 'LogicPrime', 'DataLord', 'TechTitan'
-];
 
 const generateRoomId = () => {
   let roomId;
@@ -70,56 +64,11 @@ const initializeGameState = (players) => ({
   canShoot: false,
   rolledCell: null,
   powerUpState: {
-    frozen: {},
-    shielded: {},
-    skippedTurns: {}
+    frozen: {},    // cellId -> turnsLeft
+    shielded: {},  // playerId -> turnsLeft
+    skippedTurns: {} // playerId -> boolean (true means skip next turn)
   }
 });
-
-// AI logic for making moves
-const makeAIMove = (room) => {
-  const gameState = room.gameState;
-  const currentPlayer = gameState.players[gameState.currentPlayer];
-  
-  // Delay AI moves to make them feel more natural
-  setTimeout(() => {
-    if (currentPlayer.firstMove) {
-      // Roll until we get a 1
-      processGameAction(room, 'roll', { value: 1 });
-      io.to(room.id).emit('gameStateUpdated', { gameState: room.gameState });
-    } else if (gameState.canShoot) {
-      // Find a valid target to shoot
-      const validTargets = gameState.players
-        .map((p, i) => ({ player: p, index: i }))
-        .filter(({ player, index }) => 
-          index !== gameState.currentPlayer && 
-          !player.eliminated &&
-          player.cells.some(c => c.isActive)
-        );
-
-      if (validTargets.length > 0) {
-        const target = validTargets[Math.floor(Math.random() * validTargets.length)];
-        const validCells = target.player.cells
-          .map((c, i) => ({ cell: c, index: i }))
-          .filter(({ cell }) => cell.isActive);
-        
-        if (validCells.length > 0) {
-          const targetCell = validCells[Math.floor(Math.random() * validCells.length)];
-          processGameAction(room, 'shoot', {
-            targetPlayer: target.index,
-            targetCell: targetCell.index
-          });
-          io.to(room.id).emit('gameStateUpdated', { gameState: room.gameState });
-        }
-      }
-    } else {
-      // Roll a random number
-      const roll = Math.floor(Math.random() * Math.min(room.players.length, 6)) + 1;
-      processGameAction(room, 'roll', { value: roll });
-      io.to(room.id).emit('gameStateUpdated', { gameState: room.gameState });
-    }
-  }, 1000); // 1 second delay for AI moves
-};
 
 const processGameAction = (room, action, data) => {
   const { gameState } = room;
@@ -153,7 +102,7 @@ const processGameAction = (room, action, data) => {
             message: `${currentPlayer.username} didn't roll a 1. Next player's turn!`
           });
           gameState.canShoot = false;
-          advanceToNextPlayer(room);
+          advanceToNextPlayer(gameState);
           break;
         } else {
           currentPlayer.firstMove = false;
@@ -203,7 +152,7 @@ const processGameAction = (room, action, data) => {
       }
 
       gameState.canShoot = false;
-      advanceToNextPlayer(room);
+      advanceToNextPlayer(gameState);
       break;
     }
 
@@ -253,7 +202,7 @@ const processGameAction = (room, action, data) => {
       }
 
       gameState.canShoot = false;
-      advanceToNextPlayer(room);
+      advanceToNextPlayer(gameState);
       break;
     }
 
@@ -329,7 +278,7 @@ const processGameAction = (room, action, data) => {
         createdAt: Date.now()
       };
       currentPlayer.powerUps.push(powerUp);
-      advanceToNextPlayer(room);
+      advanceToNextPlayer(gameState);
       break;
     }
 
@@ -339,7 +288,7 @@ const processGameAction = (room, action, data) => {
     }
 
     case 'endTurn': {
-      advanceToNextPlayer(room);
+      advanceToNextPlayer(gameState);
       break;
     }
   }
@@ -347,9 +296,7 @@ const processGameAction = (room, action, data) => {
   return gameState;
 };
 
-const advanceToNextPlayer = (room) => {
-  const gameState = room.gameState;
-  
+const advanceToNextPlayer = (gameState) => {
   // Process power-up effects
   for (const [playerId, turnsLeft] of Object.entries(gameState.powerUpState.shielded)) {
     if (turnsLeft <= 0) {
@@ -393,17 +340,7 @@ const advanceToNextPlayer = (room) => {
     // Remove the skip status and skip to next player
     delete gameState.powerUpState.skippedTurns[currentPlayerId];
     // Recursively call to move to next player
-    advanceToNextPlayer(room);
-    return;
-  }
-
-  // If it's an AI player's turn, make their move
-  const currentPlayer = room.players[gameState.currentPlayer];
-  if (currentPlayer.isAI) {
-    // Make AI move after a short delay
-    setTimeout(() => {
-      makeAIMove(room);
-    }, 500);
+    advanceToNextPlayer(gameState);
   }
 };
 
@@ -437,57 +374,6 @@ io.on('connection', (socket) => {
         password: undefined
       }
     });
-  });
-
-  socket.on('createAIGame', ({ totalPlayers, username }) => {
-    const roomId = generateRoomId();
-    const shuffledAiNames = [...aiNames].sort(() => Math.random() - 0.5);
-    
-    const room = {
-      id: roomId,
-      leader: socket.id,
-      password: null,
-      maxPlayers: totalPlayers,
-      players: [
-        {
-          id: socket.id,
-          username,
-          ready: true,
-          isLeader: true
-        },
-        ...Array(totalPlayers - 1).fill(null).map((_, i) => ({
-          id: `ai-${i}`,
-          username: shuffledAiNames[i],
-          ready: true,
-          isLeader: false,
-          isAI: true
-        }))
-      ],
-      gameState: null,
-      started: false
-    };
-    
-    rooms.set(roomId, room);
-    socket.join(roomId);
-    
-    // Start the game immediately since all AI players are ready
-    room.started = true;
-    room.gameState = initializeGameState(room.players);
-    
-    socket.emit('roomCreated', {
-      roomId,
-      room: {
-        ...room,
-        password: undefined
-      }
-    });
-    
-    socket.emit('gameStarted', { gameState: room.gameState });
-
-    // If the first player is AI, make their move
-    if (room.players[0].isAI) {
-      makeAIMove(room);
-    }
   });
 
   socket.on('joinRoom', ({ roomId, password, username }) => {
@@ -554,11 +440,6 @@ io.on('connection', (socket) => {
       room.started = true;
       room.gameState = initializeGameState(room.players);
       io.to(roomId).emit('gameStarted', { gameState: room.gameState });
-      
-      // If the first player is AI, make their move
-      if (room.players[0].isAI) {
-        makeAIMove(room);
-      }
     }
   });
 

@@ -86,6 +86,7 @@ const makeAIMove = (room) => {
     if (currentPlayer.firstMove) {
       // Roll until we get a 1
       processGameAction(room, 'roll', { value: 1 });
+      io.to(room.id).emit('gameStateUpdated', { gameState: room.gameState });
     } else if (gameState.canShoot) {
       // Find a valid target to shoot
       const validTargets = gameState.players
@@ -108,12 +109,14 @@ const makeAIMove = (room) => {
             targetPlayer: target.index,
             targetCell: targetCell.index
           });
+          io.to(room.id).emit('gameStateUpdated', { gameState: room.gameState });
         }
       }
     } else {
       // Roll a random number
       const roll = Math.floor(Math.random() * Math.min(room.players.length, 6)) + 1;
       processGameAction(room, 'roll', { value: roll });
+      io.to(room.id).emit('gameStateUpdated', { gameState: room.gameState });
     }
   }, 1000); // 1 second delay for AI moves
 };
@@ -397,10 +400,10 @@ const advanceToNextPlayer = (room) => {
   // If it's an AI player's turn, make their move
   const currentPlayer = room.players[gameState.currentPlayer];
   if (currentPlayer.isAI) {
-    // Emit the updated game state before AI makes its move
-    io.to(room.id).emit('gameStateUpdated', { gameState });
-    // Make AI move
-    makeAIMove(room);
+    // Make AI move after a short delay
+    setTimeout(() => {
+      makeAIMove(room);
+    }, 500);
   }
 };
 

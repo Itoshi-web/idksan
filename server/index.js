@@ -302,6 +302,53 @@ class GameStateManager {
     }
     return null;
   }
+
+  processShoot(gameState, targetPlayer, targetCell) {
+    const currentPlayer = gameState.players[gameState.currentPlayer];
+    const target = gameState.players[targetPlayer];
+    const cell = target.cells.find(c => c.id === targetCell);
+
+    if (!cell || !cell.isActive || cell.isShielded) {
+      gameState.gameLog.push({
+        type: 'blocked',
+        player: currentPlayer.username,
+        target: target.username
+      });
+      return gameState;
+    }
+
+    // Decrease bullet count
+    const shooterCell = currentPlayer.cells[gameState.rolledCell];
+    shooterCell.bullets--;
+
+    // Handle hit
+    cell.isActive = false;
+    cell.stage = 0;
+    cell.bullets = 0;
+    cell.isShielded = false;
+    cell.isFrozen = false;
+
+    gameState.gameLog.push({
+      type: 'shoot',
+      player: currentPlayer.username,
+      target: target.username,
+      cell: target.cells.indexOf(cell) + 1
+    });
+
+    // Check if player is eliminated
+    if (target.cells.every(c => !c.isActive)) {
+      target.eliminated = true;
+      gameState.gameLog.push({
+        type: 'eliminate',
+        player: currentPlayer.username,
+        target: target.username
+      });
+    }
+
+    gameState.canShoot = false;
+    this.advanceToNextPlayer(gameState);
+    return gameState;
+  }
 }
 
 // Initialize game state manager
@@ -403,6 +450,13 @@ io.on('connection', (socket) => {
         });
         gameManager.advanceToNextPlayer(room.gameState);
         updatedGameState = room.gameState;
+        break;
+      case 'shoot':
+        updatedGameState = gameManager.processShoot(
+          room.gameState, 
+          data.targetPlayer, 
+          data.targetCell
+        );
         break;
     }
 

@@ -308,11 +308,22 @@ class GameStateManager {
     const target = gameState.players[targetPlayer];
     const cell = target.cells.find(c => c.id === targetCell);
 
-    if (!cell || !cell.isActive || cell.isShielded) {
+    if (!cell || !cell.isActive) {
       gameState.gameLog.push({
         type: 'blocked',
         player: currentPlayer.username,
-        target: target.username
+        target: target.username,
+        message: 'Cell is not active'
+      });
+      return gameState;
+    }
+
+    if (cell.isShielded) {
+      gameState.gameLog.push({
+        type: 'blocked',
+        player: currentPlayer.username,
+        target: target.username,
+        message: 'Cell is shielded'
       });
       return gameState;
     }

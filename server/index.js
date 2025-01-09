@@ -308,11 +308,6 @@ class GameStateManager {
     const target = gameState.players[targetPlayer];
     const cell = target.cells.find(c => c.id === targetCell);
 
-    // Debug logs
-    console.log('Shooting at cell:', cell);
-    console.log('Target player:', target.username);
-    console.log('Cell shield status:', cell?.isShielded);
-
     if (!cell || !cell.isActive) {
       gameState.gameLog.push({
         type: 'blocked',
@@ -323,8 +318,8 @@ class GameStateManager {
       return gameState;
     }
 
-    // Only check shield if it's explicitly true
-    if (cell.isShielded === true) {
+    // Fixed shield check - only block if shield is true
+    if (cell.isShielded) {
       gameState.gameLog.push({
         type: 'blocked',
         player: currentPlayer.username,

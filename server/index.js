@@ -2,47 +2,87 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { dirname } from 'path';
 import cors from 'cors';
 import 'dotenv/config';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+// Constants
+const POWER_UPS = Object.freeze({
+  FREEZE: 'freeze',
+  SHIELD: 'shield',
+  TURN_SKIPPER: 'turnSkipper'
+});
 
+const POWER_UP_DURATION = Object.freeze({
+  [POWER_UPS.FREEZE]: 2,
+  [POWER_UPS.SHIELD]: 2
+});
+
+const MAX_BULLETS = 5;
+const MAX_STAGE = 6;
+
+// Server Setup
 const app = express();
-app.use(cors());
-
-const httpServer = createServer(app);
-const io = new Server(httpServer, {
-  cors: {
+app.use(cors({
     origin: process.env.NODE_ENV === 'production' 
       ? [/https:\/\/.*\.netlify\.app$/]
       : ["http://localhost:5173"],
     methods: ["GET", "POST"]
+}));
+
+const httpServer = createServer(app);
+const io = new Server(httpServer, { cors: app.get('cors') });
+
+// Game State Management
+class GameStateManager {
+  constructor() {
+    this.rooms = new Map();
   }
-});
 
-const rooms = new Map();
-
-const generateRoomId = () => {
+  generateRoomId() {
   let roomId;
   do {
     roomId = Math.floor(100000 + Math.random() * 900000).toString();
-  } while (rooms.has(roomId));
+    } while (this.rooms.has(roomId));
   return roomId;
-};
+  }
 
-const generateRandomPowerUp = () => {
-  const powerUps = ['freeze', 'shield', 'turnSkipper'];
-  const randomIndex = Math.floor(Math.random() * powerUps.length);
+  generateId() {
+    return Math.random().toString(36).substr(2, 9);
+  }
+
+  createRoom(socketId, maxPlayers, password, username) {
+    const roomId = this.generateRoomId();
+    const room = {
+      id: roomId,
+      leader: socketId,
+      password: password || null,
+      maxPlayers,
+      players: [{
+        id: socketId,
+        username,
+        ready: true,
+        isLeader: true
+      }],
+      gameState: null,
+      started: false
+    };
+    
+    this.rooms.set(roomId, room);
+    return room;
+  }
+
+  generateRandomPowerUp() {
+    const powerUpTypes = Object.values(POWER_UPS);
   return {
-    id: Math.random().toString(36).substr(2, 9),
-    type: powerUps[randomIndex],
+      id: this.generateId(),
+      type: powerUpTypes[Math.floor(Math.random() * powerUpTypes.length)],
     createdAt: Date.now()
   };
-};
+  }
 
-const initializeGameState = (players) => ({
+  initializeGameState(players) {
+    return {
   currentPlayer: 0,
   players: players.map(p => ({
     id: p.id,
@@ -51,7 +91,7 @@ const initializeGameState = (players) => ({
     firstMove: true,
     powerUps: [],
     cells: Array(Math.min(players.length, 5)).fill().map(() => ({
-      id: Math.random().toString(36).substr(2, 9),
+          id: this.generateId(),
       stage: 0,
       isActive: false,
       bullets: 0,
@@ -64,24 +104,20 @@ const initializeGameState = (players) => ({
   canShoot: false,
   rolledCell: null,
   powerUpState: {
-    frozen: {},    // cellId -> turnsLeft
-    shielded: {},  // playerId -> turnsLeft
-    skippedTurns: {} // playerId -> boolean (true means skip next turn)
+        frozen: {},
+        shielded: {},
+        skippedTurns: {}
+      }
+    };
   }
-});
 
-const processGameAction = (room, action, data) => {
-  const { gameState } = room;
+  processRoll(gameState, value, room) {
   const currentPlayer = gameState.players[gameState.currentPlayer];
-
-  switch (action) {
-    case 'roll': {
-      const { value } = data;
       gameState.lastRoll = value;
       
-      // Special handling for 6 in 5+ player games
+    // Handle power-up roll in 5+ player games
       if (room.players.length >= 5 && value === 6) {
-        const powerUp = generateRandomPowerUp();
+      const powerUp = this.generateRandomPowerUp();
         gameState.gameLog.push({
           type: 'powerUp',
           player: currentPlayer.username,
@@ -92,8 +128,10 @@ const processGameAction = (room, action, data) => {
       }
 
       gameState.rolledCell = value - 1;
+    const cellIndex = value - 1;
+    const cell = currentPlayer.cells[cellIndex];
 
-      // First move rule - one attempt per turn
+    // Handle first move
       if (currentPlayer.firstMove) {
         if (value !== 1) {
           gameState.gameLog.push({
@@ -102,206 +140,288 @@ const processGameAction = (room, action, data) => {
             message: `${currentPlayer.username} didn't roll a 1. Next player's turn!`
           });
           gameState.canShoot = false;
-          advanceToNextPlayer(gameState);
-          break;
-        } else {
-          currentPlayer.firstMove = false;
-        }
+        this.advanceToNextPlayer(gameState);
+        return gameState;
       }
+      currentPlayer.firstMove = false;
+    }
 
-      const cellIndex = value - 1;
-      const cell = currentPlayer.cells[cellIndex];
-
-      // Check if the cell has a gun with bullets
-      if (cell.isActive && cell.stage === 6 && cell.bullets > 0) {
+    // Handle shooting check
+    if (cell.isActive && cell.stage === MAX_STAGE && cell.bullets > 0) {
         gameState.canShoot = true;
         return gameState;
       }
 
+    this.processCellUpdate(cell, currentPlayer, cellIndex, gameState);
+    gameState.canShoot = false;
+    this.advanceToNextPlayer(gameState);
+    return gameState;
+  }
+
+  processCellUpdate(cell, player, cellIndex, gameState) {
       if (!cell.isActive) {
-        currentPlayer.cells[cellIndex] = {
-          ...cell,
-          stage: 1,
-          isActive: true,
-          bullets: 0
-        };
+      cell.stage = 1;
+      cell.isActive = true;
+      cell.bullets = 0;
         gameState.gameLog.push({
           type: 'activate',
-          player: currentPlayer.username,
+        player: player.username,
           cell: cellIndex + 1
         });
-      } else if (cell.stage < 6) {
-        if (!cell.isFrozen) {
+      return;
+    }
+
+    if (cell.stage < MAX_STAGE && !cell.isFrozen) {
           cell.stage += 1;
-          if (cell.stage === 6) {
-            cell.bullets = 5;
-            gameState.gameLog.push({
-              type: 'maxLevel',
-              player: currentPlayer.username,
-              cell: cellIndex + 1
-            });
-          }
-        }
-      } else if (cell.bullets === 0) {
-        cell.bullets = 5;
+      if (cell.stage === MAX_STAGE) {
+        cell.bullets = MAX_BULLETS;
         gameState.gameLog.push({
-          type: 'reload',
-          player: currentPlayer.username,
+          type: 'maxLevel',
+          player: player.username,
           cell: cellIndex + 1
         });
       }
-
-      gameState.canShoot = false;
-      advanceToNextPlayer(gameState);
-      break;
+      return;
     }
 
-    case 'shoot': {
-      const { targetPlayer, targetCell } = data;
-      const sourceCell = currentPlayer.cells[gameState.rolledCell];
-      const target = gameState.players[targetPlayer];
-
-      if (sourceCell.bullets > 0) {
-        const targetCellObj = target.cells[targetCell];
-        
-        // Check if the target cell is shielded
-        if (!targetCellObj.isShielded) {
-          targetCellObj.stage = 0;
-          targetCellObj.isActive = false;
-          targetCellObj.bullets = 0;
-          targetCellObj.isFrozen = false; // Reset frozen state when destroyed
-
-          sourceCell.bullets -= 1;
-
+    if (cell.stage === MAX_STAGE && cell.bullets === 0) {
+      cell.bullets = MAX_BULLETS;
           gameState.gameLog.push({
-            type: 'shoot',
-            shooter: currentPlayer.username,
-            target: target.username,
-            cell: targetCell + 1
-          });
-
-          // Remove any power-up effects on the destroyed cell
-          delete gameState.powerUpState.frozen[targetCellObj.id];
-
-          target.eliminated = target.cells.every(cell => !cell.isActive);
-          if (target.eliminated) {
-            gameState.gameLog.push({
-              type: 'eliminate',
-              player: target.username
-            });
-          }
-        } else {
-          gameState.gameLog.push({
-            type: 'blocked',
-            shooter: currentPlayer.username,
-            target: target.username,
-            cell: targetCell + 1
-          });
-          sourceCell.bullets -= 1; // Still consume a bullet even if blocked
-        }
-      }
-
-      gameState.canShoot = false;
-      advanceToNextPlayer(gameState);
-      break;
+        type: 'reload',
+        player: player.username,
+        cell: cellIndex + 1
+      });
     }
+  }
 
-    case 'usePowerUp': {
-      const { powerUpId, targetPlayer, targetCell } = data;
+  processPowerUp(gameState, powerUpId, targetPlayer, targetCell) {
+    const currentPlayer = gameState.players[gameState.currentPlayer];
       const powerUpIndex = currentPlayer.powerUps.findIndex(p => p.id === powerUpId);
-      
-      // For immediate use power-ups, powerUpIndex might be -1
-      const powerUp = powerUpIndex !== -1 
-        ? currentPlayer.powerUps[powerUpIndex]
-        : { id: powerUpId, type: data.type };
+      if (powerUpIndex === -1) return gameState;
 
-      if (powerUpIndex !== -1) {
-        currentPlayer.powerUps.splice(powerUpIndex, 1);
-      }
-
+      const powerUp = currentPlayer.powerUps[powerUpIndex];
+      currentPlayer.powerUps.splice(powerUpIndex, 1);
       const target = gameState.players[targetPlayer];
 
-      switch (powerUp.type) {
-        case 'freeze': {
-          if (targetCell) {
+    const powerUpHandlers = {
+      [POWER_UPS.FREEZE]: () => {
+        if (!targetCell) return;
             const cell = target.cells.find(c => c.id === targetCell);
-            if (cell && cell.isActive && !cell.isShielded) {
+        if (cell?.isActive && !cell.isShielded) {
               cell.isFrozen = true;
-              gameState.powerUpState.frozen[targetCell] = 2; // Freeze for 2 turns
-              
-              gameState.gameLog.push({
-                type: 'usePowerUp',
-                player: currentPlayer.username,
-                target: target.username,
-                powerUp: 'freeze'
-              });
-            }
-          }
-          break;
+          gameState.powerUpState.frozen[targetCell] = POWER_UP_DURATION[POWER_UPS.FREEZE];
         }
-        case 'shield': {
-          // Shield all cells of the target player
-          gameState.powerUpState.shielded[target.id] = 2; // Shield for 2 turns
+      },
+      [POWER_UPS.SHIELD]: () => {
+        gameState.powerUpState.shielded[target.id] = POWER_UP_DURATION[POWER_UPS.SHIELD];
           target.cells.forEach(cell => {
-            if (cell.isActive) {
-              cell.isShielded = true;
-            }
-          });
-          
-          gameState.gameLog.push({
-            type: 'usePowerUp',
-            player: currentPlayer.username,
-            target: target.username,
-            powerUp: 'shield'
-          });
-          break;
+          if (cell.isActive) cell.isShielded = true;
+        });
+      },
+      [POWER_UPS.TURN_SKIPPER]: () => {
+        if (!target.eliminated) {
+          gameState.powerUpState.skippedTurns[target.id] = true;
         }
-        case 'turnSkipper': {
-          if (!target.eliminated) {
-            // Mark the target player to skip their next turn
-            gameState.powerUpState.skippedTurns[target.id] = true;
+      }
+    };
+
+    powerUpHandlers[powerUp.type]?.();
             
             gameState.gameLog.push({
               type: 'usePowerUp',
               player: currentPlayer.username,
               target: target.username,
-              powerUp: 'turnSkipper'
-            });
-          }
-          break;
-        }
-      }
-      break;
-    }
+      powerUp: powerUp.type
+    });
 
-    case 'storePowerUp': {
-      const { powerUpType } = data;
-      const powerUp = {
-        id: Math.random().toString(36).substr(2, 9),
-        type: powerUpType,
-        createdAt: Date.now()
-      };
-      currentPlayer.powerUps.push(powerUp);
-      advanceToNextPlayer(gameState);
-      break;
-    }
+    return gameState;
+  }
 
-    case 'continueAfterPowerUp': {
-      // Don't advance to next player, allow another roll
-      break;
-    }
+  advanceToNextPlayer(gameState) {
+    this.processPowerUpEffects(gameState);
+    
+    do {
+      gameState.currentPlayer = (gameState.currentPlayer + 1) % gameState.players.length;
+    } while (gameState.players[gameState.currentPlayer].eliminated);
 
-    case 'endTurn': {
-      advanceToNextPlayer(gameState);
-      break;
+    const currentPlayerId = gameState.players[gameState.currentPlayer].id;
+    if (gameState.powerUpState.skippedTurns[currentPlayerId]) {
+      delete gameState.powerUpState.skippedTurns[currentPlayerId];
+      this.advanceToNextPlayer(gameState);
     }
   }
 
-  return gameState;
-};
-
-const advanceToNextPlayer = (gameState) => {
-  // Process power-up effects
-  for (const [playerId, turnsLeft] of Object.entries(gameState.powerUpState.shielded)) {
+  processPowerUpEffects(gameState) {
+    // Process shields
+    Object.entries(gameState.powerUpState.shielded).forEach(([playerId, turnsLeft]) => {
     if (turnsLeft <= 0) {
-      // Remove shield from all cells
+      const player = gameState.players.find(p => p.id === playerId);
+      if (player) {
+          player.cells.forEach(cell => cell.isShielded = false);
+      }
+      delete gameState.powerUpState.shielded[playerId];
+    } else {
+      gameState.powerUpState.shielded[playerId]--;
+    }
+    });
+
+    // Process frozen cells
+    Object.entries(gameState.powerUpState.frozen).forEach(([cellId, turnsLeft]) => {
+    if (turnsLeft <= 0) {
+      gameState.players.forEach(player => {
+        player.cells.forEach(cell => {
+            if (cell.id === cellId) cell.isFrozen = false;
+        });
+      });
+      delete gameState.powerUpState.frozen[cellId];
+    } else {
+      gameState.powerUpState.frozen[cellId]--;
+    }
+    });
+  }
+
+  handlePlayerDisconnect(socketId) {
+    for (const [roomId, room] of this.rooms.entries()) {
+      const playerIndex = room.players.findIndex(p => p.id === socketId);
+      
+      if (playerIndex !== -1) {
+        room.players.splice(playerIndex, 1);
+        
+        if (room.players.length === 0) {
+          this.rooms.delete(roomId);
+          return null;
+        }
+        
+        if (room.leader === socketId) {
+          room.leader = room.players[0].id;
+          room.players[0].isLeader = true;
+        }
+        
+        return room;
+      }
+    }
+    return null;
+  }
+}
+
+// Initialize game state manager
+const gameManager = new GameStateManager();
+
+// Socket event handlers
+io.on('connection', (socket) => {
+  console.log('User connected:', socket.id);
+
+  socket.on('createRoom', ({ maxPlayers, password, username }) => {
+    const room = gameManager.createRoom(socket.id, maxPlayers, password, username);
+    socket.join(room.id);
+    socket.emit('roomCreated', {
+      roomId: room.id,
+      room: { ...room, password: undefined }
+    });
+  });
+
+  socket.on('joinRoom', ({ roomId, password, username }) => {
+    const room = gameManager.rooms.get(roomId);
+    
+    if (!room) {
+      socket.emit('error', { message: 'Room not found' });
+      return;
+    }
+
+    if (room.password && room.password !== password) {
+      socket.emit('error', { message: 'Incorrect password' });
+      return;
+    }
+
+    if (room.players.length >= room.maxPlayers) {
+      socket.emit('error', { message: 'Room is full' });
+      return;
+    }
+
+    if (room.started) {
+      socket.emit('error', { message: 'Game already in progress' });
+      return;
+    }
+
+    room.players.push({
+      id: socket.id,
+      username,
+      ready: false,
+      isLeader: false
+    });
+
+    socket.join(roomId);
+    io.to(roomId).emit('playerJoined', {
+      room: { ...room, password: undefined }
+    });
+  });
+
+  socket.on('toggleReady', ({ roomId }) => {
+    const room = gameManager.rooms.get(roomId);
+    if (!room) return;
+
+    const player = room.players.find(p => p.id === socket.id);
+    if (player) {
+      player.ready = !player.ready;
+      io.to(roomId).emit('roomUpdated', {
+        room: { ...room, password: undefined }
+      });
+    }
+  });
+
+  socket.on('startGame', ({ roomId }) => {
+    const room = gameManager.rooms.get(roomId);
+    if (!room || room.leader !== socket.id) return;
+
+    if (room.players.every(p => p.ready)) {
+      room.started = true;
+      room.gameState = gameManager.initializeGameState(room.players);
+      io.to(roomId).emit('gameStarted', { gameState: room.gameState });
+    }
+  });
+
+  socket.on('gameAction', ({ roomId, action, data }) => {
+    const room = gameManager.rooms.get(roomId);
+    if (!room?.started) return;
+
+    const currentPlayerId = room.gameState.players[room.gameState.currentPlayer].id;
+    if (currentPlayerId !== socket.id) return;
+
+    let updatedGameState;
+    switch (action) {
+      case 'roll':
+        updatedGameState = gameManager.processRoll(room.gameState, data.value, room);
+        break;
+      case 'usePowerUp':
+        updatedGameState = gameManager.processPowerUp(room.gameState, data.powerUpId, data.targetPlayer, data.targetCell);
+        break;
+      case 'storePowerUp':
+        room.gameState.players[room.gameState.currentPlayer].powerUps.push({
+          id: gameManager.generateId(),
+          type: data.powerUpType,
+          createdAt: Date.now()
+        });
+        gameManager.advanceToNextPlayer(room.gameState);
+        updatedGameState = room.gameState;
+        break;
+    }
+
+    if (updatedGameState) {
+    io.to(roomId).emit('gameStateUpdated', { gameState: updatedGameState });
+    }
+  });
+
+  socket.on('disconnect', () => {
+    const updatedRoom = gameManager.handlePlayerDisconnect(socket.id);
+    if (updatedRoom) {
+      io.to(updatedRoom.id).emit('playerLeft', {
+        room: { ...updatedRoom, password: undefined }
+      });
+    }
+  });
+});
+
+const PORT = process.env.PORT || 3000;
+httpServer.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});

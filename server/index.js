@@ -40,11 +40,11 @@ class GameStateManager {
   }
 
   generateRoomId() {
-  let roomId;
-  do {
-    roomId = Math.floor(100000 + Math.random() * 900000).toString();
+    let roomId;
+    do {
+      roomId = Math.floor(100000 + Math.random() * 900000).toString();
     } while (this.rooms.has(roomId));
-  return roomId;
+    return roomId;
   }
 
   generateId() {
@@ -74,36 +74,36 @@ class GameStateManager {
 
   generateRandomPowerUp() {
     const powerUpTypes = Object.values(POWER_UPS);
-  return {
+    return {
       id: this.generateId(),
       type: powerUpTypes[Math.floor(Math.random() * powerUpTypes.length)],
-    createdAt: Date.now()
-  };
+      createdAt: Date.now()
+    };
   }
 
   initializeGameState(players) {
     return {
-  currentPlayer: 0,
-  players: players.map(p => ({
-    id: p.id,
-    username: p.username,
-    eliminated: false,
-    firstMove: true,
-    powerUps: [],
-    cells: Array(Math.min(players.length, 5)).fill().map(() => ({
+      currentPlayer: 0,
+      players: players.map(p => ({
+        id: p.id,
+        username: p.username,
+        eliminated: false,
+        firstMove: true,
+        powerUps: [],
+        cells: Array(Math.min(players.length, 5)).fill().map(() => ({
           id: this.generateId(),
-      stage: 0,
-      isActive: false,
-      bullets: 0,
-      isShielded: false,
-      isFrozen: false
-    }))
-  })),
-  lastRoll: null,
-  gameLog: [],
-  canShoot: false,
-  rolledCell: null,
-  powerUpState: {
+          stage: 0,
+          isActive: false,
+          bullets: 0,
+          isShielded: false,
+          isFrozen: false
+        }))
+      })),
+      lastRoll: null,
+      gameLog: [],
+      canShoot: false,
+      rolledCell: null,
+      powerUpState: {
         frozen: {},
         shielded: {},
         skippedTurns: {}
@@ -112,34 +112,34 @@ class GameStateManager {
   }
 
   processRoll(gameState, value, room) {
-  const currentPlayer = gameState.players[gameState.currentPlayer];
-      gameState.lastRoll = value;
+    const currentPlayer = gameState.players[gameState.currentPlayer];
+    gameState.lastRoll = value;
       
     // Handle power-up roll in 5+ player games
-      if (room.players.length >= 5 && value === 6) {
+    if (room.players.length >= 5 && value === 6) {
       const powerUp = this.generateRandomPowerUp();
-        gameState.gameLog.push({
-          type: 'powerUp',
-          player: currentPlayer.username,
-          powerUp: powerUp.type
-        });
-        currentPlayer.powerUps.push(powerUp);
-        return gameState;
-      }
+      gameState.gameLog.push({
+        type: 'powerUp',
+        player: currentPlayer.username,
+        powerUp: powerUp.type
+      });
+      currentPlayer.powerUps.push(powerUp);
+      return gameState;
+    }
 
-      gameState.rolledCell = value - 1;
+    gameState.rolledCell = value - 1;
     const cellIndex = value - 1;
     const cell = currentPlayer.cells[cellIndex];
 
     // Handle first move
-      if (currentPlayer.firstMove) {
-        if (value !== 1) {
-          gameState.gameLog.push({
-            type: 'firstMove',
-            player: currentPlayer.username,
-            message: `${currentPlayer.username} didn't roll a 1. Next player's turn!`
-          });
-          gameState.canShoot = false;
+    if (currentPlayer.firstMove) {
+      if (value !== 1) {
+        gameState.gameLog.push({
+          type: 'firstMove',
+          player: currentPlayer.username,
+          message: `${currentPlayer.username} didn't roll a 1. Next player's turn!`
+        });
+        gameState.canShoot = false;
         this.advanceToNextPlayer(gameState);
         return gameState;
       }
@@ -148,9 +148,9 @@ class GameStateManager {
 
     // Handle shooting check
     if (cell.isActive && cell.stage === MAX_STAGE && cell.bullets > 0) {
-        gameState.canShoot = true;
-        return gameState;
-      }
+      gameState.canShoot = true;
+      return gameState;
+    }
 
     this.processCellUpdate(cell, currentPlayer, cellIndex, gameState);
     gameState.canShoot = false;
@@ -159,20 +159,20 @@ class GameStateManager {
   }
 
   processCellUpdate(cell, player, cellIndex, gameState) {
-      if (!cell.isActive) {
+    if (!cell.isActive) {
       cell.stage = 1;
       cell.isActive = true;
       cell.bullets = 0;
-        gameState.gameLog.push({
-          type: 'activate',
+      gameState.gameLog.push({
+        type: 'activate',
         player: player.username,
-          cell: cellIndex + 1
-        });
+        cell: cellIndex + 1
+      });
       return;
     }
 
     if (cell.stage < MAX_STAGE && !cell.isFrozen) {
-          cell.stage += 1;
+      cell.stage += 1;
       if (cell.stage === MAX_STAGE) {
         cell.bullets = MAX_BULLETS;
         gameState.gameLog.push({
@@ -186,7 +186,7 @@ class GameStateManager {
 
     if (cell.stage === MAX_STAGE && cell.bullets === 0) {
       cell.bullets = MAX_BULLETS;
-          gameState.gameLog.push({
+      gameState.gameLog.push({
         type: 'reload',
         player: player.username,
         cell: cellIndex + 1
@@ -196,25 +196,25 @@ class GameStateManager {
 
   processPowerUp(gameState, powerUpId, targetPlayer, targetCell) {
     const currentPlayer = gameState.players[gameState.currentPlayer];
-      const powerUpIndex = currentPlayer.powerUps.findIndex(p => p.id === powerUpId);
-      if (powerUpIndex === -1) return gameState;
+    const powerUpIndex = currentPlayer.powerUps.findIndex(p => p.id === powerUpId);
+    if (powerUpIndex === -1) return gameState;
 
-      const powerUp = currentPlayer.powerUps[powerUpIndex];
-      currentPlayer.powerUps.splice(powerUpIndex, 1);
-      const target = gameState.players[targetPlayer];
+    const powerUp = currentPlayer.powerUps[powerUpIndex];
+    currentPlayer.powerUps.splice(powerUpIndex, 1);
+    const target = gameState.players[targetPlayer];
 
     const powerUpHandlers = {
       [POWER_UPS.FREEZE]: () => {
         if (!targetCell) return;
-            const cell = target.cells.find(c => c.id === targetCell);
+        const cell = target.cells.find(c => c.id === targetCell);
         if (cell?.isActive && !cell.isShielded) {
-              cell.isFrozen = true;
+          cell.isFrozen = true;
           gameState.powerUpState.frozen[targetCell] = POWER_UP_DURATION[POWER_UPS.FREEZE];
         }
       },
       [POWER_UPS.SHIELD]: () => {
         gameState.powerUpState.shielded[target.id] = POWER_UP_DURATION[POWER_UPS.SHIELD];
-          target.cells.forEach(cell => {
+        target.cells.forEach(cell => {
           if (cell.isActive) cell.isShielded = true;
         });
       },
@@ -227,10 +227,10 @@ class GameStateManager {
 
     powerUpHandlers[powerUp.type]?.();
             
-            gameState.gameLog.push({
-              type: 'usePowerUp',
-              player: currentPlayer.username,
-              target: target.username,
+    gameState.gameLog.push({
+      type: 'usePowerUp',
+      player: currentPlayer.username,
+      target: target.username,
       powerUp: powerUp.type
     });
 
@@ -254,29 +254,29 @@ class GameStateManager {
   processPowerUpEffects(gameState) {
     // Process shields
     Object.entries(gameState.powerUpState.shielded).forEach(([playerId, turnsLeft]) => {
-    if (turnsLeft <= 0) {
-      const player = gameState.players.find(p => p.id === playerId);
-      if (player) {
+      if (turnsLeft <= 0) {
+        const player = gameState.players.find(p => p.id === playerId);
+        if (player) {
           player.cells.forEach(cell => cell.isShielded = false);
+        }
+        delete gameState.powerUpState.shielded[playerId];
+      } else {
+        gameState.powerUpState.shielded[playerId]--;
       }
-      delete gameState.powerUpState.shielded[playerId];
-    } else {
-      gameState.powerUpState.shielded[playerId]--;
-    }
     });
 
     // Process frozen cells
     Object.entries(gameState.powerUpState.frozen).forEach(([cellId, turnsLeft]) => {
-    if (turnsLeft <= 0) {
-      gameState.players.forEach(player => {
-        player.cells.forEach(cell => {
+      if (turnsLeft <= 0) {
+        gameState.players.forEach(player => {
+          player.cells.forEach(cell => {
             if (cell.id === cellId) cell.isFrozen = false;
+          });
         });
-      });
-      delete gameState.powerUpState.frozen[cellId];
-    } else {
-      gameState.powerUpState.frozen[cellId]--;
-    }
+        delete gameState.powerUpState.frozen[cellId];
+      } else {
+        gameState.powerUpState.frozen[cellId]--;
+      }
     });
   }
 
@@ -311,18 +311,17 @@ class GameStateManager {
     if (!cell || !cell.isActive) {
       gameState.gameLog.push({
         type: 'blocked',
-        player: currentPlayer.username,
+        shooter: currentPlayer.username,
         target: target.username,
         message: 'Cell is not active'
       });
       return gameState;
     }
 
-    // Fixed shield check - only block if shield is true
     if (cell.isShielded) {
       gameState.gameLog.push({
         type: 'blocked',
-        player: currentPlayer.username,
+        shooter: currentPlayer.username,
         target: target.username,
         message: 'Cell is shielded'
       });
@@ -342,7 +341,7 @@ class GameStateManager {
 
     gameState.gameLog.push({
       type: 'shoot',
-      player: currentPlayer.username,
+      shooter: currentPlayer.username,
       target: target.username,
       cell: target.cells.indexOf(cell) + 1
     });
@@ -352,7 +351,7 @@ class GameStateManager {
       target.eliminated = true;
       gameState.gameLog.push({
         type: 'eliminate',
-        player: currentPlayer.username,
+        shooter: currentPlayer.username,
         target: target.username
       });
     }
@@ -473,7 +472,7 @@ io.on('connection', (socket) => {
     }
 
     if (updatedGameState) {
-    io.to(roomId).emit('gameStateUpdated', { gameState: updatedGameState });
+      io.to(roomId).emit('gameStateUpdated', { gameState: updatedGameState });
     }
   });
 

@@ -13,11 +13,6 @@ const POWER_UPS = Object.freeze({
   TURN_SKIPPER: 'turnSkipper'
 });
 
-const POWER_UP_DURATION = Object.freeze({
-  [POWER_UPS.FREEZE]: 2,
-  [POWER_UPS.SHIELD]: 2
-});
-
 const MAX_BULLETS = 5;
 const MAX_STAGE = 6;
 
@@ -203,24 +198,39 @@ class GameStateManager {
     currentPlayer.powerUps.splice(powerUpIndex, 1);
     const target = gameState.players[targetPlayer];
 
+    // Store the current player's ID to track power-up duration
+    const currentPlayerId = currentPlayer.id;
+
     const powerUpHandlers = {
       [POWER_UPS.FREEZE]: () => {
         if (!targetCell) return;
         const cell = target.cells.find(c => c.id === targetCell);
         if (cell?.isActive && !cell.isShielded) {
           cell.isFrozen = true;
-          gameState.powerUpState.frozen[targetCell] = POWER_UP_DURATION[POWER_UPS.FREEZE];
+          // Set duration until the current player's next turn
+          gameState.powerUpState.frozen[targetCell] = {
+            turnsLeft: Infinity,
+            expiresOnPlayerId: currentPlayerId
+          };
         }
       },
       [POWER_UPS.SHIELD]: () => {
-        gameState.powerUpState.shielded[target.id] = POWER_UP_DURATION[POWER_UPS.SHIELD];
+        // Set duration until the current player's next turn
+        gameState.powerUpState.shielded[target.id] = {
+          turnsLeft: Infinity,
+          expiresOnPlayerId: currentPlayerId
+        };
         target.cells.forEach(cell => {
           if (cell.isActive) cell.isShielded = true;
         });
       },
       [POWER_UPS.TURN_SKIPPER]: () => {
         if (!target.eliminated) {
-          gameState.powerUpState.skippedTurns[target.id] = true;
+          // Set duration until the current player's next turn
+          gameState.powerUpState.skippedTurns[target.id] = {
+            active: true,
+            expiresOnPlayerId: currentPlayerId
+          };
         }
       }
     };
@@ -245,62 +255,44 @@ class GameStateManager {
     } while (gameState.players[gameState.currentPlayer].eliminated);
 
     const currentPlayerId = gameState.players[gameState.currentPlayer].id;
-    if (gameState.powerUpState.skippedTurns[currentPlayerId]) {
-      delete gameState.powerUpState.skippedTurns[currentPlayerId];
-      this.advanceToNextPlayer(gameState);
+
+    // Check if current player's turn should be skipped
+    const skipInfo = gameState.powerUpState.skippedTurns[currentPlayerId];
+    if (skipInfo?.active) {
+      // If this is the turn of the player who cast the skip, remove the effect
+      if (currentPlayerId === skipInfo.expiresOnPlayerId) {
+        delete gameState.powerUpState.skippedTurns[currentPlayerId];
+      } else {
+        this.advanceToNextPlayer(gameState);
+      }
     }
   }
 
   processPowerUpEffects(gameState) {
+    const currentPlayerId = gameState.players[gameState.currentPlayer].id;
+
     // Process shields
-    Object.entries(gameState.powerUpState.shielded).forEach(([playerId, turnsLeft]) => {
-      if (turnsLeft <= 0) {
+    Object.entries(gameState.powerUpState.shielded).forEach(([playerId, info]) => {
+      if (currentPlayerId === info.expiresOnPlayerId) {
         const player = gameState.players.find(p => p.id === playerId);
         if (player) {
           player.cells.forEach(cell => cell.isShielded = false);
         }
         delete gameState.powerUpState.shielded[playerId];
-      } else {
-        gameState.powerUpState.shielded[playerId]--;
       }
     });
 
     // Process frozen cells
-    Object.entries(gameState.powerUpState.frozen).forEach(([cellId, turnsLeft]) => {
-      if (turnsLeft <= 0) {
+    Object.entries(gameState.powerUpState.frozen).forEach(([cellId, info]) => {
+      if (currentPlayerId === info.expiresOnPlayerId) {
         gameState.players.forEach(player => {
           player.cells.forEach(cell => {
             if (cell.id === cellId) cell.isFrozen = false;
           });
         });
         delete gameState.powerUpState.frozen[cellId];
-      } else {
-        gameState.powerUpState.frozen[cellId]--;
       }
     });
-  }
-
-  handlePlayerDisconnect(socketId) {
-    for (const [roomId, room] of this.rooms.entries()) {
-      const playerIndex = room.players.findIndex(p => p.id === socketId);
-      
-      if (playerIndex !== -1) {
-        room.players.splice(playerIndex, 1);
-        
-        if (room.players.length === 0) {
-          this.rooms.delete(roomId);
-          return null;
-        }
-        
-        if (room.leader === socketId) {
-          room.leader = room.players[0].id;
-          room.players[0].isLeader = true;
-        }
-        
-        return room;
-      }
-    }
-    return null;
   }
 
   processShoot(gameState, targetPlayer, targetCell) {
@@ -359,6 +351,29 @@ class GameStateManager {
     gameState.canShoot = false;
     this.advanceToNextPlayer(gameState);
     return gameState;
+  }
+
+  handlePlayerDisconnect(socketId) {
+    for (const [roomId, room] of this.rooms.entries()) {
+      const playerIndex = room.players.findIndex(p => p.id === socketId);
+      
+      if (playerIndex !== -1) {
+        room.players.splice(playerIndex, 1);
+        
+        if (room.players.length === 0) {
+          this.rooms.delete(roomId);
+          return null;
+        }
+        
+        if (room.leader === socketId) {
+          room.leader = room.players[0].id;
+          room.players[0].isLeader = true;
+        }
+        
+        return room;
+      }
+    }
+    return null;
   }
 }
 

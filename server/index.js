@@ -16,6 +16,14 @@ const POWER_UPS = Object.freeze({
 const MAX_BULLETS = 5;
 const MAX_STAGE = 6;
 
+// Function to get power-up trigger number based on player count
+function getPowerUpTriggerNumber(playerCount) {
+  if (playerCount <= 2) return 3;
+  if (playerCount === 3) return 4;
+  if (playerCount === 4) return 5;
+  return 6; // 5 or more players
+}
+
 // Server Setup
 const app = express();
 app.use(cors({
@@ -110,8 +118,9 @@ class GameStateManager {
     const currentPlayer = gameState.players[gameState.currentPlayer];
     gameState.lastRoll = value;
       
-    // Handle power-up roll in 5+ player games
-    if (room.players.length >= 5 && value === 6) {
+    // Handle power-up roll based on player count
+    const powerUpTrigger = getPowerUpTriggerNumber(room.players.length);
+    if (value === powerUpTrigger) {
       const powerUp = this.generateRandomPowerUp();
       gameState.gameLog.push({
         type: 'powerUp',
@@ -295,6 +304,29 @@ class GameStateManager {
     });
   }
 
+  handlePlayerDisconnect(socketId) {
+    for (const [roomId, room] of this.rooms.entries()) {
+      const playerIndex = room.players.findIndex(p => p.id === socketId);
+      
+      if (playerIndex !== -1) {
+        room.players.splice(playerIndex, 1);
+        
+        if (room.players.length === 0) {
+          this.rooms.delete(roomId);
+          return null;
+        }
+        
+        if (room.leader === socketId) {
+          room.leader = room.players[0].id;
+          room.players[0].isLeader = true;
+        }
+        
+        return room;
+      }
+    }
+    return null;
+  }
+
   processShoot(gameState, targetPlayer, targetCell) {
     const currentPlayer = gameState.players[gameState.currentPlayer];
     const target = gameState.players[targetPlayer];
@@ -351,29 +383,6 @@ class GameStateManager {
     gameState.canShoot = false;
     this.advanceToNextPlayer(gameState);
     return gameState;
-  }
-
-  handlePlayerDisconnect(socketId) {
-    for (const [roomId, room] of this.rooms.entries()) {
-      const playerIndex = room.players.findIndex(p => p.id === socketId);
-      
-      if (playerIndex !== -1) {
-        room.players.splice(playerIndex, 1);
-        
-        if (room.players.length === 0) {
-          this.rooms.delete(roomId);
-          return null;
-        }
-        
-        if (room.leader === socketId) {
-          room.leader = room.players[0].id;
-          room.players[0].isLeader = true;
-        }
-        
-        return room;
-      }
-    }
-    return null;
   }
 }
 

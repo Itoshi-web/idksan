@@ -218,60 +218,59 @@ class GameStateManager {
     currentPlayer.powerUps.splice(powerUpIndex, 1);
     const target = gameState.players[targetPlayer];
 
-    if (powerUp.type === POWER_UPS.TURN_SKIPPER) {
-      if (!target.eliminated) {
-        // Set turn skip
-        gameState.powerUpState.skippedTurns[target.id] = {
-          expiresAt: gameState.turnCount + 2
-        };
-        
-        // Add to game log
-        gameState.gameLog.push({
-          type: 'powerUp',
-          player: currentPlayer.username,
-          target: target.username,
-          powerUp: powerUp.type,
-          message: `${target.username}'s next turn will be skipped`
-        });
-        
-        // Increment power-ups used this turn
-        gameState.powerUpsUsedThisTurn++;
-        return gameState;
-      }
-    }
-
-    // Handle other power-ups...
-    const powerUpHandlers = {
-      [POWER_UPS.FREEZE]: () => {
-        if (!targetCell) return;
+    // Handle each power-up type
+    switch (powerUp.type) {
+      case POWER_UPS.FREEZE:
+        if (!targetCell) return gameState;
         const cell = target.cells.find(c => c.id === targetCell);
         if (cell?.isActive && !cell.isShielded) {
           cell.isFrozen = true;
           gameState.powerUpState.frozen[targetCell] = {
             expiresAt: gameState.turnCount + POWER_UP_DURATION
           };
+          gameState.gameLog.push({
+            type: 'powerUp',
+            player: currentPlayer.username,
+            target: target.username,
+            powerUp: powerUp.type,
+            message: `${currentPlayer.username} froze ${target.username}'s cell`
+          });
         }
-      },
-      [POWER_UPS.SHIELD]: () => {
+        break;
+
+      case POWER_UPS.SHIELD:
         gameState.powerUpState.shielded[target.id] = {
           expiresAt: gameState.turnCount + POWER_UP_DURATION
         };
         target.cells.forEach(cell => {
           if (cell.isActive) cell.isShielded = true;
         });
-      }
-    };
+        gameState.gameLog.push({
+          type: 'powerUp',
+          player: currentPlayer.username,
+          target: target.username,
+          powerUp: powerUp.type,
+          message: `${target.username}'s cells are now shielded`
+        });
+        break;
 
-    powerUpHandlers[powerUp.type]?.();
+      case POWER_UPS.TURN_SKIPPER:
+        if (!target.eliminated) {
+          gameState.powerUpState.skippedTurns[target.id] = {
+            expiresAt: gameState.turnCount + 2
+          };
+          gameState.gameLog.push({
+            type: 'powerUp',
+            player: currentPlayer.username,
+            target: target.username,
+            powerUp: powerUp.type,
+            message: `${target.username}'s next turn will be skipped`
+          });
+        }
+        break;
+    }
+
     gameState.powerUpsUsedThisTurn++;
-    
-    gameState.gameLog.push({
-      type: 'usePowerUp',
-      player: currentPlayer.username,
-      target: target.username,
-      powerUp: powerUp.type
-    });
-
     return gameState;
   }
 

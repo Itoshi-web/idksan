@@ -88,7 +88,7 @@ class GameStateManager {
   initializeGameState(players) {
     return {
       currentPlayer: 0,
-      turnCount: 0, // Add global turn counter
+      turnCount: 0,
       players: players.map(p => ({
         id: p.id,
         username: p.username,
@@ -258,15 +258,19 @@ class GameStateManager {
     
     do {
       gameState.currentPlayer = (gameState.currentPlayer + 1) % gameState.players.length;
-    } while (gameState.players[gameState.currentPlayer].eliminated);
-
-    const currentPlayerId = gameState.players[gameState.currentPlayer].id;
-
-    // Check if current player's turn should be skipped
-    const skipInfo = gameState.powerUpState.skippedTurns[currentPlayerId];
-    if (skipInfo?.expiresAt > gameState.turnCount) {
-      this.advanceToNextPlayer(gameState);
-    }
+      
+      // Check if current player's turn should be skipped
+      const currentPlayerId = gameState.players[gameState.currentPlayer].id;
+      if (gameState.powerUpState.skippedTurns[currentPlayerId]?.expiresAt > gameState.turnCount) {
+        // If the player is skipped, continue to the next player
+        continue;
+      }
+      
+      // Break if we found a non-eliminated, non-skipped player
+      if (!gameState.players[gameState.currentPlayer].eliminated) {
+        break;
+      }
+    } while (true);
   }
 
   processPowerUpEffects(gameState) {
@@ -293,14 +297,19 @@ class GameStateManager {
       }
     });
 
-    // Clean up expired turn skips
+    // Process turn skips
     Object.entries(gameState.powerUpState.skippedTurns).forEach(([playerId, info]) => {
       if (info.expiresAt <= gameState.turnCount) {
         delete gameState.powerUpState.skippedTurns[playerId];
+        // Add to game log that the skip has expired
+        gameState.gameLog.push({
+          type: 'powerUp',
+          player: gameState.players.find(p => p.id === playerId)?.username || 'Unknown',
+          message: 'Turn skip expired'
+        });
       }
     });
   }
-}
 
   handlePlayerDisconnect(socketId) {
     for (const [roomId, room] of this.rooms.entries()) {

@@ -239,10 +239,17 @@ class GameStateManager {
       },
       [POWER_UPS.TURN_SKIPPER]: () => {
         if (!target.eliminated) {
+          // Apply turn skip for the target's next turn
           gameState.powerUpState.skippedTurns[target.id] = {
-            expiresAt: gameState.turnCount + 2
+            expiresAt: gameState.turnCount + 2  // Will skip their next turn
           };
-          this.advanceToNextPlayer(gameState);
+          
+          gameState.gameLog.push({
+            type: 'powerUp',
+            player: currentPlayer.username,
+            target: target.username,
+            message: `${target.username}'s next turn will be skipped`
+          });
         }
       }
     };

@@ -215,14 +215,12 @@ class GameStateManager {
         const cell = target.cells.find(c => c.id === targetCell);
         if (cell?.isActive && !cell.isShielded) {
           cell.isFrozen = true;
-          // Set expiration based on turn count
           gameState.powerUpState.frozen[targetCell] = {
             expiresAt: gameState.turnCount + POWER_UP_DURATION
           };
         }
       },
       [POWER_UPS.SHIELD]: () => {
-        // Set expiration based on turn count
         gameState.powerUpState.shielded[target.id] = {
           expiresAt: gameState.turnCount + POWER_UP_DURATION
         };
@@ -232,16 +230,24 @@ class GameStateManager {
       },
       [POWER_UPS.TURN_SKIPPER]: () => {
         if (!target.eliminated) {
-          // Set expiration based on turn count
+          // Apply turn skip immediately for the next turn
           gameState.powerUpState.skippedTurns[target.id] = {
-            expiresAt: gameState.turnCount + 1 // Skip only one turn
+            expiresAt: gameState.turnCount + 2 // Skip next turn
           };
+          
+          // Add to game log
+          gameState.gameLog.push({
+            type: 'powerUp',
+            player: currentPlayer.username,
+            target: target.username,
+            message: `${target.username}'s next turn will be skipped`
+          });
         }
       }
     };
 
     powerUpHandlers[powerUp.type]?.();
-            
+    this.advanceToNextPlayer(gameState);        
     gameState.gameLog.push({
       type: 'usePowerUp',
       player: currentPlayer.username,
@@ -256,18 +262,27 @@ class GameStateManager {
     this.processPowerUpEffects(gameState);
     gameState.turnCount++; // Increment turn counter
     
+    // Store the initial player index to detect full circle
+    const startingPlayer = gameState.currentPlayer;
+    
     do {
+      // Move to next player
       gameState.currentPlayer = (gameState.currentPlayer + 1) % gameState.players.length;
       
-      // Check if current player's turn should be skipped
+      // Get current player's ID
       const currentPlayerId = gameState.players[gameState.currentPlayer].id;
-      if (gameState.powerUpState.skippedTurns[currentPlayerId]?.expiresAt > gameState.turnCount) {
-        // If the player is skipped, continue to the next player
-        continue;
+      
+      // Check if player is skipped or eliminated
+      const isSkipped = gameState.powerUpState.skippedTurns[currentPlayerId]?.expiresAt > gameState.turnCount;
+      const isEliminated = gameState.players[gameState.currentPlayer].eliminated;
+      
+      // If player is neither skipped nor eliminated, we found our next player
+      if (!isSkipped && !isEliminated) {
+        break;
       }
       
-      // Break if we found a non-eliminated, non-skipped player
-      if (!gameState.players[gameState.currentPlayer].eliminated) {
+      // If we've gone full circle and haven't found a valid player, break to prevent infinite loop
+      if (gameState.currentPlayer === startingPlayer) {
         break;
       }
     } while (true);

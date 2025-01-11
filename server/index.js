@@ -15,6 +15,7 @@ const POWER_UPS = Object.freeze({
 
 const MAX_BULLETS = 5;
 const MAX_STAGE = 6;
+const POWER_UP_DURATION = 2; // Duration in turns for power-ups
 
 // Function to get power-up trigger number based on player count
 function getPowerUpTriggerNumber(playerCount) {
@@ -87,6 +88,7 @@ class GameStateManager {
   initializeGameState(players) {
     return {
       currentPlayer: 0,
+      turnCount: 0, // Add global turn counter
       players: players.map(p => ({
         id: p.id,
         username: p.username,
@@ -107,9 +109,9 @@ class GameStateManager {
       canShoot: false,
       rolledCell: null,
       powerUpState: {
-        frozen: {},
-        shielded: {},
-        skippedTurns: {}
+        frozen: {}, // { cellId: { expiresAt: turnCount } }
+        shielded: {}, // { playerId: { expiresAt: turnCount } }
+        skippedTurns: {} // { playerId: { expiresAt: turnCount } }
       }
     };
   }
@@ -207,27 +209,22 @@ class GameStateManager {
     currentPlayer.powerUps.splice(powerUpIndex, 1);
     const target = gameState.players[targetPlayer];
 
-    // Store the current player's ID to track power-up duration
-    const currentPlayerId = currentPlayer.id;
-
     const powerUpHandlers = {
       [POWER_UPS.FREEZE]: () => {
         if (!targetCell) return;
         const cell = target.cells.find(c => c.id === targetCell);
         if (cell?.isActive && !cell.isShielded) {
           cell.isFrozen = true;
-          // Set duration until the current player's next turn
+          // Set expiration based on turn count
           gameState.powerUpState.frozen[targetCell] = {
-            turnsLeft: Infinity,
-            expiresOnPlayerId: currentPlayerId
+            expiresAt: gameState.turnCount + POWER_UP_DURATION
           };
         }
       },
       [POWER_UPS.SHIELD]: () => {
-        // Set duration until the current player's next turn
+        // Set expiration based on turn count
         gameState.powerUpState.shielded[target.id] = {
-          turnsLeft: Infinity,
-          expiresOnPlayerId: currentPlayerId
+          expiresAt: gameState.turnCount + POWER_UP_DURATION
         };
         target.cells.forEach(cell => {
           if (cell.isActive) cell.isShielded = true;
@@ -235,10 +232,9 @@ class GameStateManager {
       },
       [POWER_UPS.TURN_SKIPPER]: () => {
         if (!target.eliminated) {
-          // Set duration until the current player's next turn
+          // Set expiration based on turn count
           gameState.powerUpState.skippedTurns[target.id] = {
-            active: true,
-            expiresOnPlayerId: currentPlayerId
+            expiresAt: gameState.turnCount + 1 // Skip only one turn
           };
         }
       }
@@ -258,6 +254,7 @@ class GameStateManager {
 
   advanceToNextPlayer(gameState) {
     this.processPowerUpEffects(gameState);
+    gameState.turnCount++; // Increment turn counter
     
     do {
       gameState.currentPlayer = (gameState.currentPlayer + 1) % gameState.players.length;
@@ -267,22 +264,15 @@ class GameStateManager {
 
     // Check if current player's turn should be skipped
     const skipInfo = gameState.powerUpState.skippedTurns[currentPlayerId];
-    if (skipInfo?.active) {
-      // If this is the turn of the player who cast the skip, remove the effect
-      if (currentPlayerId === skipInfo.expiresOnPlayerId) {
-        delete gameState.powerUpState.skippedTurns[currentPlayerId];
-      } else {
-        this.advanceToNextPlayer(gameState);
-      }
+    if (skipInfo?.expiresAt > gameState.turnCount) {
+      this.advanceToNextPlayer(gameState);
     }
   }
 
   processPowerUpEffects(gameState) {
-    const currentPlayerId = gameState.players[gameState.currentPlayer].id;
-
     // Process shields
     Object.entries(gameState.powerUpState.shielded).forEach(([playerId, info]) => {
-      if (currentPlayerId === info.expiresOnPlayerId) {
+      if (info.expiresAt <= gameState.turnCount) {
         const player = gameState.players.find(p => p.id === playerId);
         if (player) {
           player.cells.forEach(cell => cell.isShielded = false);
@@ -293,13 +283,20 @@ class GameStateManager {
 
     // Process frozen cells
     Object.entries(gameState.powerUpState.frozen).forEach(([cellId, info]) => {
-      if (currentPlayerId === info.expiresOnPlayerId) {
+      if (info.expiresAt <= gameState.turnCount) {
         gameState.players.forEach(player => {
           player.cells.forEach(cell => {
             if (cell.id === cellId) cell.isFrozen = false;
           });
         });
         delete gameState.powerUpState.frozen[cellId];
+      }
+    });
+
+    // Clean up expired turn skips
+    Object.entries(gameState.powerUpState.skippedTurns).forEach(([playerId, info]) => {
+      if (info.expiresAt <= gameState.turnCount) {
+        delete gameState.powerUpState.skippedTurns[playerId];
       }
     });
   }

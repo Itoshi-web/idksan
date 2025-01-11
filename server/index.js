@@ -300,6 +300,7 @@ class GameStateManager {
       }
     });
   }
+}
 
   handlePlayerDisconnect(socketId) {
     for (const [roomId, room] of this.rooms.entries()) {

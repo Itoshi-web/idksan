@@ -533,6 +533,11 @@ io.on('connection', (socket) => {
           data.targetCell
         );
         break;
+      case 'cancelShoot':
+        // Just disable shooting without advancing turn
+        room.gameState.canShoot = false;
+        updatedGameState = room.gameState;
+        break;
     }
 
     if (updatedGameState) {

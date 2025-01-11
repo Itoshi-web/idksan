@@ -109,10 +109,12 @@ class GameStateManager {
       canShoot: false,
       rolledCell: null,
       powerUpState: {
-        frozen: {}, // { cellId: { expiresAt: turnCount } }
-        shielded: {}, // { playerId: { expiresAt: turnCount } }
-        skippedTurns: {} // { playerId: { expiresAt: turnCount } }
-      }
+        frozen: {},
+        shielded: {},
+        skippedTurns: {}
+      },
+      powerUpsUsedThisTurn: 0,
+      MAX_POWERUPS_PER_TURN: 4
     };
   }
 
@@ -201,6 +203,13 @@ class GameStateManager {
   }
 
   processPowerUp(gameState, powerUpId, targetPlayer, targetCell) {
+    if (gameState.powerUpsUsedThisTurn >= gameState.MAX_POWERUPS_PER_TURN) {
+      return { 
+        ...gameState, 
+        error: 'Maximum power-ups per turn reached'
+      };
+    }
+
     const currentPlayer = gameState.players[gameState.currentPlayer];
     const powerUpIndex = currentPlayer.powerUps.findIndex(p => p.id === powerUpId);
     if (powerUpIndex === -1) return gameState;
@@ -230,24 +239,18 @@ class GameStateManager {
       },
       [POWER_UPS.TURN_SKIPPER]: () => {
         if (!target.eliminated) {
-          // Apply turn skip immediately for the next turn
           gameState.powerUpState.skippedTurns[target.id] = {
-            expiresAt: gameState.turnCount + 2 // Skip next turn
+            expiresAt: gameState.turnCount + 2
           };
-          
-          // Add to game log
-          gameState.gameLog.push({
-            type: 'powerUp',
-            player: currentPlayer.username,
-            target: target.username,
-            message: `${target.username}'s next turn will be skipped`
-          });
+          this.advanceToNextPlayer(gameState);
         }
       }
     };
 
     powerUpHandlers[powerUp.type]?.();
-    this.advanceToNextPlayer(gameState);        
+    
+    gameState.powerUpsUsedThisTurn++;
+
     gameState.gameLog.push({
       type: 'usePowerUp',
       player: currentPlayer.username,
@@ -260,7 +263,8 @@ class GameStateManager {
 
   advanceToNextPlayer(gameState) {
     this.processPowerUpEffects(gameState);
-    gameState.turnCount++; // Increment turn counter
+    gameState.turnCount++;
+    gameState.powerUpsUsedThisTurn = 0;
     
     // Store the initial player index to detect full circle
     const startingPlayer = gameState.currentPlayer;

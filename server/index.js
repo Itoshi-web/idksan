@@ -218,6 +218,29 @@ class GameStateManager {
     currentPlayer.powerUps.splice(powerUpIndex, 1);
     const target = gameState.players[targetPlayer];
 
+    if (powerUp.type === POWER_UPS.TURN_SKIPPER) {
+      if (!target.eliminated) {
+        // Set turn skip
+        gameState.powerUpState.skippedTurns[target.id] = {
+          expiresAt: gameState.turnCount + 2
+        };
+        
+        // Add to game log
+        gameState.gameLog.push({
+          type: 'powerUp',
+          player: currentPlayer.username,
+          target: target.username,
+          powerUp: powerUp.type,
+          message: `${target.username}'s next turn will be skipped`
+        });
+        
+        // Increment power-ups used this turn
+        gameState.powerUpsUsedThisTurn++;
+        return gameState;
+      }
+    }
+
+    // Handle other power-ups...
     const powerUpHandlers = {
       [POWER_UPS.FREEZE]: () => {
         if (!targetCell) return;
@@ -236,28 +259,12 @@ class GameStateManager {
         target.cells.forEach(cell => {
           if (cell.isActive) cell.isShielded = true;
         });
-      },
-      [POWER_UPS.TURN_SKIPPER]: () => {
-        if (!target.eliminated) {
-          // Apply turn skip for the target's next turn
-          gameState.powerUpState.skippedTurns[target.id] = {
-            expiresAt: gameState.turnCount + 2  // Will skip their next turn
-          };
-          
-          gameState.gameLog.push({
-            type: 'powerUp',
-            player: currentPlayer.username,
-            target: target.username,
-            message: `${target.username}'s next turn will be skipped`
-          });
-        }
       }
     };
 
     powerUpHandlers[powerUp.type]?.();
-    
     gameState.powerUpsUsedThisTurn++;
-
+    
     gameState.gameLog.push({
       type: 'usePowerUp',
       player: currentPlayer.username,

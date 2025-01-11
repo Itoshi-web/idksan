@@ -259,29 +259,28 @@ class GameStateManager {
   advanceToNextPlayer(gameState) {
     this.processPowerUpEffects(gameState);
     
-    let nextPlayerIndex;
-    let attempts = 0;
-    const maxAttempts = gameState.players.length;
-
     do {
-      nextPlayerIndex = (gameState.currentPlayer + 1) % gameState.players.length;
-      gameState.currentPlayer = nextPlayerIndex;
-      attempts++;
-
-      // Break the loop if we've tried all players to prevent infinite loop
-      if (attempts >= maxAttempts) {
-        // Reset all skipped turns if we can't find a valid player
-        gameState.powerUpState.skippedTurns = {};
-        break;
-      }
-    } while (
-      gameState.players[nextPlayerIndex].eliminated || 
-      gameState.powerUpState.skippedTurns[gameState.players[nextPlayerIndex].id]?.active
-    );
+      gameState.currentPlayer = (gameState.currentPlayer + 1) % gameState.players.length;
+    } while (gameState.players[gameState.currentPlayer].eliminated);
 
     const currentPlayerId = gameState.players[gameState.currentPlayer].id;
 
-    // Check and clear power-up effects for the current player
+    // Check if current player's turn should be skipped
+    const skipInfo = gameState.powerUpState.skippedTurns[currentPlayerId];
+    if (skipInfo?.active) {
+      // If this is the turn of the player who cast the skip, remove the effect
+      if (currentPlayerId === skipInfo.expiresOnPlayerId) {
+        delete gameState.powerUpState.skippedTurns[currentPlayerId];
+      } else {
+        this.advanceToNextPlayer(gameState);
+      }
+    }
+  }
+
+  processPowerUpEffects(gameState) {
+    const currentPlayerId = gameState.players[gameState.currentPlayer].id;
+
+    // Process shields
     Object.entries(gameState.powerUpState.shielded).forEach(([playerId, info]) => {
       if (currentPlayerId === info.expiresOnPlayerId) {
         const player = gameState.players.find(p => p.id === playerId);
@@ -292,6 +291,7 @@ class GameStateManager {
       }
     });
 
+    // Process frozen cells
     Object.entries(gameState.powerUpState.frozen).forEach(([cellId, info]) => {
       if (currentPlayerId === info.expiresOnPlayerId) {
         gameState.players.forEach(player => {
@@ -300,12 +300,6 @@ class GameStateManager {
           });
         });
         delete gameState.powerUpState.frozen[cellId];
-      }
-    });
-
-    Object.entries(gameState.powerUpState.skippedTurns).forEach(([playerId, info]) => {
-      if (currentPlayerId === info.expiresOnPlayerId) {
-        delete gameState.powerUpState.skippedTurns[playerId];
       }
     });
   }
